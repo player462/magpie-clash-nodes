@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>梯子节点</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="_magpie/bridge.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main id="app">
+    <header class="cn-head">
+      <div>
+        <h1>梯子节点</h1>
+        <p class="cn-muted">给供应商、或它的每个账号，分别指定 Clash 节点</p>
+      </div>
+      <span id="badge" class="cn-pill">载入中…</span>
+    </header>
+
+    <section class="cn-controls">
+      <label class="cn-field"><span>供应商</span><select id="providerSelect"></select></label>
+      <label class="cn-field"><span>节点</span><select id="nodeSelect"></select></label>
+      <label class="cn-check"><input type="checkbox" id="perAccount"><span>按账号分配</span></label>
+      <span class="cn-spacer"></span>
+      <button type="button" id="apply">应用</button>
+      <button type="button" id="restore">还原</button>
+    </section>
+
+    <div id="status" class="cn-status"></div>
+    <details id="pool" class="cn-picker">
+      <summary id="poolSummary"></summary>
+      <div id="poolBody"></div>
+    </details>
+    <section id="detail"></section>
+  </main>
+  <script src="__FALLBACK__"></script>
+</body>
+</html>

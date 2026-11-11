@@ -1,0 +1,1 @@
+window.__CLASH_NODES_STATE__ = {"generatedAt":"","controller":null,"version":"","mainGroup":"","current":"","groups":[],"nodes":[],"pool":[],"poolEffective":[],"drift":{"missing":[],"added":[]},"staleInstance":false,"router":{"running":false},"providers":[],"accounts":[],"error":"插件尚未初始化：在 magpie 的 Plugins 页把本插件关一次再开","last":null};

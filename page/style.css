@@ -1,0 +1,98 @@
+/* One honest page on top of bridge.js's native magpie styling. No grey boxes:
+   sections breathe, hairlines separate, the accent is used only where it
+   means something. Everything follows --magpie-* (light/dark + accent). */
+:root {
+  --cn-line: var(--magpie-border, rgba(127, 127, 127, .22));
+  --cn-soft: var(--magpie-muted, rgba(127, 127, 127, .08));
+  --cn-ok: var(--magpie-accent, #2e9e6b);
+  --cn-bad: #d9534f;
+}
+body { padding: 26px 30px 40px; max-width: 920px; margin: 0 auto; }
+.cn-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 4px; }
+.cn-head h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: .2px; }
+.cn-muted { opacity: .55; font-size: 12px; margin: 0; }
+.cn-pill { padding: 3px 11px; border: 1px solid var(--cn-line); border-radius: 999px; font-size: 11px; white-space: nowrap; opacity: .85; }
+.cn-pill.on { color: var(--cn-ok); border-color: color-mix(in srgb, var(--cn-ok) 45%, transparent); opacity: 1; }
+
+/* the one control row: no box, just a quiet baseline */
+.cn-controls {
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin: 18px 0 6px; padding: 14px 0 16px;
+  border-top: 1px solid var(--cn-line); border-bottom: 1px solid var(--cn-line);
+}
+.cn-field { display: flex; align-items: center; gap: 7px; }
+.cn-field > span { font-size: 12px; opacity: .6; }
+.cn-field select { min-width: 230px; }
+.cn-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; margin-left: 4px; cursor: pointer; }
+.cn-check input { accent-color: var(--cn-ok); width: 14px; height: 14px; cursor: pointer; }
+.cn-controls .cn-spacer { flex: 1; }
+.cn-controls button { min-width: 76px; }
+.cn-controls button:disabled { opacity: .55; cursor: default; }
+.cn-primary { border-color: color-mix(in srgb, var(--cn-ok) 55%, transparent); color: var(--cn-ok); }
+
+/* status: a single quiet line, not a banner */
+.cn-status { margin: 10px 0 2px; font-size: 12px; opacity: .7; min-height: 17px; }
+.cn-status:empty { display: none; }
+.cn-status.ok { color: var(--cn-ok); opacity: 1; }
+.cn-status.bad { color: var(--cn-bad); opacity: 1; }
+
+/* detail card: only the table gets a border; prose floats free */
+.cn-card { margin: 14px 0 0; }
+.cn-card > h2 { font-size: 12.5px; font-weight: 600; margin: 0 0 10px; }
+.cn-card > p { margin: 0 0 12px; font-size: 12.5px; opacity: .75; line-height: 1.7; }
+.cn-card table { width: 100%; border-collapse: collapse; font-size: 12.5px; border: 1px solid var(--cn-line); border-radius: 8px; overflow: hidden; }
+.cn-card th, .cn-card td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--cn-line); }
+.cn-card tbody tr:last-child td { border-bottom: 0; }
+.cn-card tbody tr:hover { background: var(--cn-soft); }
+.cn-card th { opacity: .55; font-weight: 500; font-size: 11.5px; background: var(--cn-soft); }
+td.cn-name { max-width: 300px; }
+.cn-dim { opacity: .55; }
+.cn-now { color: var(--cn-ok); font-weight: 600; }
+.cn-tag { padding: 2px 9px; border: 1px solid var(--cn-line); border-radius: 999px; font-size: 11px; white-space: nowrap; }
+.cn-tag.on { color: var(--cn-ok); border-color: color-mix(in srgb, var(--cn-ok) 45%, transparent); }
+.cn-card select { min-width: 240px; }
+.cn-empty { padding: 18px 2px; font-size: 12.5px; opacity: .6; }
+.cn-foot { margin-top: 14px; }
+.cn-foot .cn-muted { font-size: 11.5px; }
+
+/* the start button lives inside the empty state, not floating */
+.cn-card .cn-actions { display: flex; gap: 8px; margin: 12px 0 2px; }
+
+/* the pool picker: one quiet collapsible row, grid of checkboxes */
+.cn-picker {
+  margin: 12px 0 0; border: 1px solid var(--cn-line); border-radius: 10px; padding: 0 16px;
+}
+.cn-picker summary { cursor: pointer; padding: 12px 0; font-size: 12.5px; list-style: none; user-select: none; }
+.cn-picker summary::-webkit-details-marker { display: none; }
+.cn-picker summary::before { content: '▸'; opacity: .5; margin-right: 7px; }
+.cn-picker[open] summary::before { content: '▾'; }
+.cn-picker summary b { font-weight: 600; }
+.cn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 4px 22px; padding: 2px 0 12px; }
+.cn-region {
+  grid-column: 1 / -1; font-size: 11px; font-weight: 600; letter-spacing: .4px;
+  opacity: .55; margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--cn-line);
+}
+.cn-region:first-child { border-top: 0; margin-top: 2px; padding-top: 0; }
+.cn-region span { opacity: .75; font-weight: 400; margin-left: 4px; }
+.cn-pick {
+  display: flex; align-items: center; gap: 7px; font-size: 12px;
+  padding: 4px 7px; margin: 0 -7px; border-radius: 7px; cursor: pointer; min-width: 0;
+}
+.cn-pick:hover { background: var(--cn-soft); }
+.cn-pick.on { background: color-mix(in srgb, var(--cn-ok) 9%, transparent); }
+.cn-pick input { accent-color: var(--cn-ok); flex-shrink: 0; margin: 0; }
+.cn-pick span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-delay {
+  font-style: normal; font-size: 10.5px; line-height: 1; padding: 3px 7px;
+  border-radius: 999px; border: 1px solid var(--cn-line); opacity: .8;
+  white-space: nowrap; flex-shrink: 0; font-variant-numeric: tabular-nums;
+}
+.cn-delay.fast { color: var(--cn-ok); border-color: color-mix(in srgb, var(--cn-ok) 40%, transparent); opacity: 1; }
+.cn-delay.mid { opacity: .75; }
+.cn-delay.slow { color: #d29922; border-color: color-mix(in srgb, #d29922 45%, transparent); opacity: 1; }
+.cn-delay.bad { color: var(--cn-bad); border-color: color-mix(in srgb, var(--cn-bad) 45%, transparent); opacity: 1; }
+.cn-port { font-style: normal; font-size: 10px; font-family: ui-monospace, Consolas, monospace; opacity: .6; flex-shrink: 0; }
+.cn-oktext { color: var(--cn-ok); }
+.cn-badtext { color: var(--cn-bad); }
+.cn-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 14px; }
+.cn-actions button:disabled { opacity: .55; cursor: default; }

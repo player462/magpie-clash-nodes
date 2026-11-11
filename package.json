@@ -1,0 +1,26 @@
+{
+  "name": "magpie-clash-nodes",
+  "version": "0.1.0",
+  "description": "magpie 原生页面：给整个供应商、或同一供应商的每个账号，分别指定 Clash 梯子节点",
+  "type": "module",
+  "main": "./index.mjs",
+  "files": ["index.mjs", "lib", "page", "README.md"],
+  "keywords": ["magpie", "magpie-plugin", "clash", "mihomo", "proxy", "nodes"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/player462/magpie-clash-nodes.git"
+  },
+  "homepage": "https://github.com/player462/magpie-clash-nodes#readme",
+  "bugs": "https://github.com/player462/magpie-clash-nodes/issues",
+  "magpie": {
+    "name": "Clash 节点",
+    "page": {
+      "title": "Clash 节点",
+      "titles": { "zh": "梯子节点", "zh-TW": "梯子节点", "ja": "Clash ノード" },
+      "file": "page/index.html",
+      "icon": "page/icon.svg"
+    },
+    "permissions": ["providers:list"]
+  }
+}
