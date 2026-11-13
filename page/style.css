@@ -28,6 +28,8 @@ body {
   gap: 14px; margin-bottom: 18px;
 }
 .cn-brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.cn-head-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.cn-refresh { padding: 3px 10px; font-size: 11px; }
 .cn-logo {
   width: 34px; height: 34px; flex-shrink: 0;
   display: grid; place-items: center;
@@ -151,6 +153,48 @@ body {
 .cn-region:first-child { border-top: 0; margin-top: 2px; padding-top: 0; }
 .cn-region-name { font-size: 11px; font-weight: 650; letter-spacing: .5px; opacity: .6; }
 .cn-region-count { font-size: 10.5px; opacity: .45; font-variant-numeric: tabular-nums; }
+
+/* subscription chips above the node grid */
+.cn-profiles {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  padding: 10px 0 12px; margin-bottom: 8px; border-bottom: 1px solid var(--cn-line);
+}
+.cn-prof-title { font-size: 11px; opacity: .5; margin-right: 2px; }
+.cn-prof {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; border: 1px solid var(--cn-line);
+  cursor: pointer; font-size: 11.5px; user-select: none; transition: background .1s ease;
+}
+.cn-prof:hover { background: var(--cn-soft-2); }
+.cn-prof.on {
+  color: var(--cn-ok); border-color: color-mix(in srgb, var(--cn-ok) 45%, transparent);
+  background: color-mix(in srgb, var(--cn-ok) 8%, transparent);
+}
+.cn-prof input { accent-color: var(--cn-ok); width: 12px; height: 12px; margin: 0; }
+.cn-prof i { font-style: normal; font-size: 10px; opacity: .55; }
+.cn-prof-save { margin-left: auto; padding: 3px 11px; font-size: 11px; }
+.cn-profile-row { border-top: 1px solid var(--cn-line) !important; margin-top: 16px; padding-top: 11px; }
+.cn-profile-row .cn-region-name { font-size: 12px; opacity: .8; }
+
+/* one collapsible block per subscription — keeps 800 nodes out of the way */
+.cn-prof-blocks { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 10px; }
+.cn-prof-block {
+  border: 1px solid var(--cn-line); border-radius: 10px; padding: 0 14px;
+  background: color-mix(in srgb, var(--magpie-fg, #808080) 2%, transparent);
+}
+.cn-prof-block > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  display: flex; align-items: center; gap: 8px; padding: 10px 0; font-size: 12px;
+}
+.cn-prof-block > summary::-webkit-details-marker { display: none; }
+.cn-prof-block > summary::before { content: '▸'; opacity: .4; font-size: 11px; transition: transform .12s ease; }
+.cn-prof-block[open] > summary::before { content: '▾'; }
+.cn-prof-block[open] > summary { border-bottom: 1px solid var(--cn-line); margin-bottom: 2px; }
+.cn-prof-name { font-weight: 600; }
+.cn-prof-stat { font-size: 10.5px; opacity: .5; font-variant-numeric: tabular-nums; }
+.cn-prof-time { margin-left: auto; font-size: 10px; opacity: .4; }
+.cn-prof-block .cn-grid { padding: 8px 0 12px; }
+.cn-prof-block .cn-region:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
 
 .cn-pick {
   display: flex; align-items: center; gap: 7px; font-size: 12px;

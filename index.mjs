@@ -21,12 +21,16 @@ import { createController } from './lib/controller.mjs';
 import * as router from './lib/router.mjs';
 import * as magpie from './lib/magpie.mjs';
 import * as accountsLib from './lib/accounts.mjs';
+import * as profiles from './lib/profiles.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DIR = path.join(magpie.magpieDir(), 'clash-nodes');
 const STATE_JSON = path.join(DIR, 'plugin-state.json');
 const LAST_CMD = path.join(DIR, 'plugin-last-cmd.json');
 const STATE_FILES = [path.join(HERE, 'page', 'state.js')];
+const PROFILES_FILE = path.join(DIR, 'profiles.json');
+const DELAYS_FILE = path.join(DIR, 'delays.json');
+const PORTS_MIGRATED = path.join(DIR, 'ports-v2.flag');
 
 const now = () => new Date().toISOString();
 
@@ -52,23 +56,138 @@ function readPool() {
   return Array.isArray(j.nodes) ? j.nodes.filter((n) => typeof n === 'string' && n) : [];
 }
 function writePool(names) { writeJson(POOL_FILE, { nodes: names, at: Date.now() }); }
-function effectivePool(pool, currentNames) {
-  if (!pool.length) return currentNames;
-  const eff = pool.filter((n) => currentNames.includes(n));
-  return eff.length ? eff : currentNames; // every pooled name vanished: fall back wide
+
+// Which Clash Party subscriptions take part. Missing file = only the active one.
+function readSelectedProfiles() {
+  const j = readJson(PROFILES_FILE, null);
+  if (j && Array.isArray(j.profiles)) return j.profiles.filter((x) => typeof x === 'string');
+  const all = profiles.listProfiles();
+  const act = all.find((p) => p.active);
+  if (!act) return [];
+  // Freeze the first choice: a later change of Clash's active profile must not
+  // silently move which subscription this plugin serves.
+  writeSelectedProfiles([act.id]);
+  return [act.id];
+}
+function writeSelectedProfiles(ids) { writeJson(PROFILES_FILE, { profiles: ids, at: Date.now() }); }
+
+// Older versions used bare node names; multi-subscription names are prefixed
+// ("一元机场 · 香港01"). Carry the old port and pool choices over so saved
+// account proxies keep pointing at the same physical node.
+function migrateLegacyNames(cat) {
+  try {
+    const active = (cat.profiles.find((p) => p.active) || {}).id || '';
+    const byOrig = new Map();
+    for (const n of cat.nodes) {
+      const cur = byOrig.get(n.originalName);
+      if (!cur || n.profileId === active) byOrig.set(n.originalName, n.name);
+    }
+    const pf = router.portsPath();
+    const ports = readJson(pf, {});
+    let changed = false;
+    for (const n of cat.nodes) {
+      if (ports[n.name] === undefined && ports[n.originalName] !== undefined) {
+        ports[n.name] = ports[n.originalName];
+        changed = true;
+      }
+    }
+    if (changed) writeJson(pf, ports);
+    const pool = readPool();
+    if (pool.length) {
+      const next = pool.map((x) => byOrig.get(x) || x);
+      if (next.join('\u0000') !== pool.join('\u0000')) writePool(next);
+    }
+  } catch { /* migration is best effort */ }
+}
+
+// One-time repair of ports.json. Older versions stored bare node names; the
+// first multi-subscription attempt also allocated prefixed names on top of
+// them. Keep only the legacy port each active-subscription node had, so the
+// URLs already written into magpie's accountProxies still reach that node.
+function ensurePortsMigrated(cat) {  if (fs.existsSync(PORTS_MIGRATED)) return;
+  try {
+    const pf = router.portsPath();
+    const ports = readJson(pf, {});
+    const legacy = {};
+    for (const [k, v] of Object.entries(ports)) if (!k.includes('·')) legacy[k] = v;
+    if (Object.keys(legacy).length) {
+      const active = (cat.profiles.find((p) => p.active) || {}).id || '';
+      const next = {};
+      for (const n of cat.nodes) {
+        if (n.profileId === active && legacy[n.originalName] !== undefined) next[n.name] = legacy[n.originalName];
+      }
+      writeJson(pf, next);
+    }
+    fs.writeFileSync(PORTS_MIGRATED, new Date().toISOString());
+  } catch { /* best effort */ }
+}
+
+function loadCatalogue() {
+  let cat;
+  try { cat = profiles.loadCatalogue(readSelectedProfiles()); }
+  catch { cat = { profiles: [], chosen: [], nodes: [], blocks: [] }; }
+  if (cat.nodes.length) { ensurePortsMigrated(cat); migrateLegacyNames(cat); }
+  return cat;
+}
+function readDelays() { return readJson(DELAYS_FILE, {}); }
+function writeDelays(map) { writeJson(DELAYS_FILE, map); }
+
+// Starting one listener per node of a 700-node subscription would cost far
+// more than it is worth. When nothing is checked, cap the default pool and
+// balance it across subscriptions instead of taking the first N alphabetically.
+const MAX_DEFAULT_LISTENERS = 120;
+function effectivePool(pool, nodes) {
+  const list = (nodes || []).map((x) => (typeof x === 'string' ? { name: x, profile: '' } : x));
+  const names = list.map((x) => x.name);
+  if (pool.length) {
+    const eff = pool.filter((n) => names.includes(n));
+    return eff.length ? eff : names;
+  }
+  if (names.length <= MAX_DEFAULT_LISTENERS) return names;
+  const groups = new Map();
+  for (const n of list) {
+    const k = n.profile || '';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(n.name);
+  }
+  const out = [];
+  for (let i = 0; out.length < MAX_DEFAULT_LISTENERS; i++) {
+    let added = false;
+    for (const arr of groups.values()) {
+      if (i < arr.length) {
+        out.push(arr[i]);
+        added = true;
+        if (out.length >= MAX_DEFAULT_LISTENERS) break;
+      }
+    }
+    if (!added) break;
+  }
+  return out;
 }
 
 async function collect(c, error) {
-  const st = await c.state();
+  let st = null;
+  try { st = await c.state(); } catch (e) { if (!error) error = e?.message || String(e); }
   let r = router.routerStatus();
   if (r.running && !(await router.instanceAlive())) {
     // never report a dead instance as ready — clear the stale state file
     await router.stopRouter({ quiet: true }).catch(() => {});
     r = router.routerStatus();
   }
+  const cat = loadCatalogue();
+  const useProfiles = cat.nodes.length > 0;
+  const delayMap = readDelays();
+  const nodes = useProfiles
+    ? cat.nodes.map((n) => ({
+        name: n.name, originalName: n.originalName, type: n.type, region: n.region, alive: true,
+        delay: typeof delayMap[n.name] === 'number' ? delayMap[n.name] : null,
+        profile: n.profileName, profileId: n.profileId,
+      }))
+    : (st ? st.nodes : []);
   const pool = readPool();
-  const currentNames = st.nodes.map((n) => n.name);
-  const eff = effectivePool(pool, currentNames);
+  const currentNames = nodes.map((n) => n.name);
+  const eff = effectivePool(pool, nodes);
+  const poolTruncated = !pool.length && nodes.length > MAX_DEFAULT_LISTENERS;
   const drift = pool.length ? {
     missing: pool.filter((n) => !currentNames.includes(n)),
     added: currentNames.filter((n) => !pool.includes(n)),
@@ -86,12 +205,16 @@ async function collect(c, error) {
     generatedAt: now(),
     controller: await c.target().catch(() => null),
     version: await c.version().catch(() => ''),
-    mainGroup: st.mainGroup,
-    current: st.groups.find((g) => g.name === st.mainGroup)?.now || '',
-    groups: st.groups.map((g) => ({ name: g.name, type: g.type, now: g.now, nodes: g.nodes })),
-    nodes: st.nodes,
+    mainGroup: st ? st.mainGroup : '',
+    current: st ? (st.groups.find((g) => g.name === st.mainGroup)?.now || '') : '',
+    groups: st ? st.groups.map((g) => ({ name: g.name, type: g.type, now: g.now, nodes: g.nodes })) : [],
+    profiles: cat.profiles.map((p) => ({ id: p.id, label: p.label, active: p.active, updatedAt: p.updatedAt || 0 })),
+    profileChosen: cat.chosen,
+    multiProfile: useProfiles,
+    nodes,
     pool,
     poolEffective: eff,
+    poolTruncated,
     drift,
     staleInstance,
     router: r,
@@ -102,19 +225,38 @@ async function collect(c, error) {
 }
 
 /** Node ports must exist, be alive, and match the pool before an assignment lands. */
+/** Running instance already serves exactly these names on their saved ports? */
+function mappingMatches(r, names) {
+  if (!r.running) return false;
+  const map = r.mapping || {};
+  if (JSON.stringify(Object.keys(map).sort()) !== JSON.stringify(names.slice().sort())) return false;
+  const desired = readJson(router.portsPath(), {});
+  return names.every((n) => desired[n] === undefined || map[n] === desired[n]);
+}
+
 async function ensureRouter(c) {
-  const st = await c.state();
-  const eff = effectivePool(readPool(), st.nodes.map((n) => n.name));
+  const cat = loadCatalogue();
+  let sourceNodes;
+  let blockMap = null;
+  if (cat.nodes.length) {
+    sourceNodes = cat.nodes;
+    blockMap = Object.fromEntries(cat.nodes.map((n) => [n.name, n.raw]));
+  } else {
+    const st = await c.state();
+    sourceNodes = st.nodes;
+  }
+  const eff = effectivePool(readPool(), sourceNodes);
   const r = router.routerStatus();
   if (r.running && !(await router.instanceAlive())) {
     // state file says running but the mihomo died: clear the lie, respawn
     await router.stopRouter({ quiet: true }).catch(() => {});
-  } else if (r.running && JSON.stringify(Object.keys(r.mapping || {}).sort()) === JSON.stringify(eff.slice().sort())) {
+  } else if (mappingMatches(r, eff)) {
     return r;
   } else if (r.running) {
     await router.stopRouter({ quiet: true }).catch(() => {});
   }
-  return await router.startRouter(eff);
+  const proxyBlocks = blockMap ? eff.map((n) => blockMap[n]).filter(Boolean) : undefined;
+  return await router.startRouter(eff, { proxyBlocks });
 }
 
 async function execute(cmd, c) {
@@ -134,36 +276,64 @@ async function execute(cmd, c) {
     }
 
     case 'test': {
-      const st = await c.state();
-      await c.withDelays(st, { concurrency: 10 });
-      return { ok: true, message: '测速完成', at: now() };
+      const rr = await ensureRouter(c);
+      const names = Object.keys(rr.mapping || {});
+      const delays = await router.testDelays(names, { controllerPort: rr.controllerPort, concurrency: 8 });
+      writeDelays({ ...readDelays(), ...delays });
+      const ok = Object.values(delays).filter((v) => typeof v === 'number').length;
+      return { ok: true, message: `测速完成：${ok}/${names.length} 个节点可用`, at: now() };
     }
 
     case 'start': {
-      const st = await c.state();
-      const currentNames = st.nodes.map((n) => n.name);
+      const cat = loadCatalogue();
+      const sourceNodes = cat.nodes.length ? cat.nodes : (await c.state()).nodes;
+      const currentNames = sourceNodes.map((n) => n.name);
       const names = cmd.nodes?.length
         ? cmd.nodes.filter((n) => currentNames.includes(n))
-        : effectivePool(readPool(), currentNames);
+        : effectivePool(readPool(), sourceNodes);
+      const blockMap = Object.fromEntries(cat.nodes.map((n) => [n.name, n.raw]));
+      const proxyBlocks = cat.nodes.length ? names.map((n) => blockMap[n]).filter(Boolean) : undefined;
       const s = await router.startRouter(names, {
-        basePort: cmd.basePort, controllerPort: cmd.controllerPort,
+        basePort: cmd.basePort, controllerPort: cmd.controllerPort, proxyBlocks,
       });
       return { ok: true, message: `已就绪 ${names.length} 个节点端口（pid ${s.pid}）`, at: now() };
     }
 
     case 'setPool': {
-      const st = await c.state();
-      const currentNames = st.nodes.map((n) => n.name);
+      const cat = loadCatalogue();
+      const sourceNodes = cat.nodes.length ? cat.nodes : (await c.state()).nodes;
+      const currentNames = sourceNodes.map((n) => n.name);
       const names = (cmd.nodes || []).filter((n) => currentNames.includes(n));
       writePool(names);
-      const eff = effectivePool(names, currentNames);
+      const eff = effectivePool(names, sourceNodes);
       const prev = router.routerStatus();
-      const same = prev.running &&
-        JSON.stringify(Object.keys(prev.mapping || {}).sort()) === JSON.stringify(eff.slice().sort());
-      if (!same) await router.startRouter(eff);
+      const same = mappingMatches(prev, eff);
+      if (!same) {
+        const blockMap = Object.fromEntries(cat.nodes.map((n) => [n.name, n.raw]));
+        const proxyBlocks = cat.nodes.length ? eff.map((n) => blockMap[n]).filter(Boolean) : undefined;
+        await router.startRouter(eff, { proxyBlocks });
+      }
       return {
         ok: true,
         message: names.length ? `节点池已保存：${eff.length} 个节点可用` : '节点池已清空：全部节点可用',
+        at: now(),
+      };
+    }
+
+    case 'setProfiles': {
+      const ids = (cmd.profiles || []).filter((x) => typeof x === 'string');
+      writeSelectedProfiles(ids);
+      const cat = loadCatalogue();
+      const valid = new Set(cat.nodes.map((n) => n.name));
+      const kept = readPool().filter((n) => valid.has(n));
+      writePool(kept);
+      const names = effectivePool(kept, cat.nodes);
+      const blockMap = Object.fromEntries(cat.nodes.map((n) => [n.name, n.raw]));
+      const proxyBlocks = names.map((n) => blockMap[n]).filter(Boolean);
+      await router.startRouter(names, { proxyBlocks });
+      return {
+        ok: true,
+        message: ids.length ? `已启用 ${ids.length} 个订阅：${cat.nodes.length} 个节点` : `已启用全部 ${cat.profiles.length} 个订阅：${cat.nodes.length} 个节点`,
         at: now(),
       };
     }
@@ -174,8 +344,7 @@ async function execute(cmd, c) {
 
     case 'assign': {
       const rr = await ensureRouter(c);
-      const st = await c.state();
-      const delays = Object.fromEntries(st.nodes.map((n) => [n.name, n.delay]));
+      const delays = readDelays();
       let providers = magpie.listProviders();
       if (cmd.providerIds?.length) providers = providers.filter((p) => cmd.providerIds.includes(p.id));
       const plan = magpie.buildPlan({
@@ -209,8 +378,7 @@ async function execute(cmd, c) {
     case 'assignAccounts': {
       const rr = await ensureRouter(c);
       const list = accountsLib.readAccountCache() || accountsLib.listAccounts();
-      const st = await c.state();
-      const delays = Object.fromEntries(st.nodes.map((n) => [n.name, n.delay]));
+      const delays = readDelays();
       const plan = accountsLib.buildAccountPlan({
         accounts: list, mapping: rr.mapping, delays,
         strategy: cmd.strategy || 'spread',

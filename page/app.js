@@ -8,6 +8,7 @@
   var sending = false;
   var currentId = '';
   var drafts = {};           // providerId -> { perAccount, provider, accounts: {key: value} }
+  var openProfiles = {};     // subscription id -> expanded?
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(v) {
@@ -115,8 +116,10 @@
       var n = byName[name] || {};
       return {
         name: name,
+        originalName: n.originalName || name,
         url: 'http://127.0.0.1:' + r.mapping[name],
         region: n.region || '其他',
+        profile: n.profile || '',
         delay: n.delay,
       };
     });
@@ -146,9 +149,10 @@
     nodeEntries().forEach(function (n) {
       var d = n.delay == null ? '' : ' · ' + n.delay + 'ms';
       var dot = n.delay == null ? '○' : n.delay < 300 ? '●' : n.delay < 1000 ? '◐' : '○';
-      var label = dot + ' ' + esc(n.region) + ' — ' + esc(n.name) + d;
+      var label = dot + ' ' + esc(n.originalName || n.name) + d;
       var opt = '<option value="' + esc(n.url) + '"' + (current === n.url ? ' selected' : '') + '>' + label + '</option>';
-      (groups[n.region] = groups[n.region] || []).push(opt);
+      var g = (n.profile ? n.profile + ' · ' : '') + n.region;
+      (groups[g] = groups[g] || []).push(opt);
     });
     Object.keys(groups).sort().forEach(function (g) {
       h += '<optgroup label="' + esc(g) + '">' + groups[g].join('') + '</optgroup>';
@@ -210,41 +214,80 @@
     return '<i class="cn-delay' + cls + '">' + n.delay + 'ms</i>';
   }
 
+  function fmtTime(ms) {
+    if (!ms) return '';
+    var d = new Date(ms);
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+
   function renderPicker() {
     var sum = $('poolSummary'), body = $('poolBody');
     var names = S.nodes || [];
     var pool = S.pool || [];
     var drift = S.drift || { missing: [], added: [] };
     var inst = (S.router && S.router.running && S.router.nodes) || [];
-    var byRegion = {};
-    names.forEach(function (n) { (byRegion[n.region] = byRegion[n.region] || []).push(n); });
-    var parts = [];
-    Object.keys(byRegion).sort().forEach(function (rg) {
-      var list = byRegion[rg];
+    var profs = S.profiles || [];
+    var chosen = S.profileChosen || [];
+    var allChosen = !chosen.length;
+    var selected = profs.filter(function (p) { return allChosen || chosen.indexOf(p.id) >= 0; });
+
+    var profHtml = '';
+    if (profs.length) {
+      profHtml = '<div class="cn-profiles"><span class="cn-prof-title">订阅</span>' + profs.map(function (p) {
+        var on = allChosen || chosen.indexOf(p.id) >= 0;
+        var count = names.filter(function (n) { return n.profileId === p.id; }).length;
+        return '<label class="cn-prof' + (on ? ' on' : '') + '" title="更新于 ' + esc(fmtTime(p.updatedAt) || '未知') + '">' +
+          '<input type="checkbox" data-kind="profile" data-id="' + esc(p.id) + '"' + (on ? ' checked' : '') + '>' +
+          esc(p.label) + '<i>' + count + '</i></label>';
+      }).join('') +
+        '<button type="button" class="cn-btn ghost cn-prof-save" data-act="profiles-save">应用订阅</button></div>';
+    }
+
+    var blocks = (selected.length ? selected : [{ id: '', label: '当前订阅', updatedAt: 0 }]).map(function (p) {
+      var list = names.filter(function (n) { return (n.profileId || '') === p.id; });
+      if (!list.length) return '';
       var picked = list.filter(function (n) { return pool.indexOf(n.name) >= 0; }).length;
-      parts.push('<div class="cn-region"><span class="cn-region-name">' + esc(rg) + '</span>' +
-        '<span class="cn-region-count">' + (picked ? picked + ' / ' : '') + list.length + '</span></div>');
-      list.forEach(function (n) {
-        var inPool = pool.indexOf(n.name) >= 0;
-        var port = inst.indexOf(n.name) >= 0 ? (S.router.mapping[n.name] || '') : '';
-        parts.push('<label class="cn-pick' + (inPool ? ' on' : '') + '">' +
-          '<input type="checkbox" data-kind="pick" data-node="' + esc(n.name) + '"' + (inPool ? ' checked' : '') + '>' +
-          '<span class="cn-pick-name" title="' + esc(n.name) + '">' + esc(n.name) + '</span>' +
-          delayPill(n) +
-          (port ? '<i class="cn-port">:' + port + '</i>' : '') +
-          '</label>');
+      var open = openProfiles[p.id] !== undefined ? openProfiles[p.id] : selected.length === 1;
+      var byRegion = {};
+      list.forEach(function (n) { (byRegion[n.region] = byRegion[n.region] || []).push(n); });
+      var inner = '';
+      Object.keys(byRegion).sort().forEach(function (rg) {
+        var arr = byRegion[rg];
+        var sel = arr.filter(function (n) { return pool.indexOf(n.name) >= 0; }).length;
+        inner += '<div class="cn-region"><span class="cn-region-name">' + esc(rg) + '</span>' +
+          '<span class="cn-region-count">' + (sel ? sel + ' / ' : '') + arr.length + '</span></div>';
+        arr.forEach(function (n) {
+          var inPool = pool.indexOf(n.name) >= 0;
+          var port = inst.indexOf(n.name) >= 0 ? (S.router.mapping[n.name] || '') : '';
+          inner += '<label class="cn-pick' + (inPool ? ' on' : '') + '">' +
+            '<input type="checkbox" data-kind="pick" data-node="' + esc(n.name) + '"' + (inPool ? ' checked' : '') + '>' +
+            '<span class="cn-pick-name" title="' + esc(n.name) + '">' + esc(n.originalName || n.name) + '</span>' +
+            delayPill(n) +
+            (port ? '<i class="cn-port">:' + port + '</i>' : '') +
+            '</label>';
+        });
       });
-    });
+      return '<details class="cn-prof-block" data-prof="' + esc(p.id) + '"' + (open ? ' open' : '') + '>' +
+        '<summary><span class="cn-prof-name">' + esc(p.label) + '</span>' +
+        '<span class="cn-prof-stat">' + list.length + ' 个节点' + (picked ? ' · 已选 ' + picked : '') + '</span>' +
+        (p.updatedAt ? '<span class="cn-prof-time">更新 ' + esc(fmtTime(p.updatedAt)) + '</span>' : '') +
+        '</summary><div class="cn-grid">' + inner + '</div></details>';
+    }).join('');
+
     var flags = [];
+    if (profs.length) flags.push('<span class="cn-flag">' + selected.length + ' / ' + profs.length + ' 个订阅</span>');
     if (drift.missing.length) flags.push('<span class="cn-flag bad">' + drift.missing.length + ' 个节点已失效</span>');
     if (drift.added.length) flags.push('<span class="cn-flag ok">' + drift.added.length + ' 个新节点</span>');
     if (S.staleInstance) flags.push('<span class="cn-flag bad">端口待同步</span>');
     sum.innerHTML = '<span class="cn-sum-title">可用节点池</span>' +
       '<span class="cn-sum-count">' + (pool.length ? '已选 ' + pool.length : '全部') + ' / ' + names.length + '</span>' +
       flags.join('');
-    body.innerHTML =
-      '<p class="cn-note">勾选的节点才会开成本地端口；供应商和账号的下拉只从池子里选。不勾 = 全部可用，Clash 换订阅后这里会提示增减。</p>' +
-      '<div class="cn-grid">' + parts.join('') + '</div>' +
+    body.innerHTML = profHtml +
+      '<p class="cn-note">勾选的节点才会开成本地端口；供应商和账号的下拉只从池子里选。Clash 更新订阅后点右上「刷新」即可读到新节点。</p>' +
+      (S.poolTruncated ? '<div class="cn-warn"><span>每个订阅节点很多，默认先启用 ' + (S.poolEffective || []).length +
+        ' 个均衡节点。需要更多请在下面勾选后保存。</span></div>' : '') +
+      '<div class="cn-prof-blocks">' + blocks + '</div>' +
       '<div class="cn-actions">' +
       '<button type="button" class="cn-btn primary" data-act="pool-save">保存并同步端口</button>' +
       '<button type="button" class="cn-btn" data-act="pool-test">⚡ 测全部延迟</button>' +
@@ -331,6 +374,9 @@
     var drift = S.drift || { missing: [], added: [] };
     var bad = !!S.staleInstance || drift.missing.length > 0;
     var badge = r.running ? (r.nodes || []).length + ' 个节点就绪' : '节点未就绪';
+    if (S.multiProfile && (S.profiles || []).length) {
+      badge = (S.profiles || []).length + ' 个订阅 · ' + (S.nodes || []).length + ' 个节点' + (r.running ? ' · 就绪' : '');
+    }
     if (bad) badge += ' · 需同步';
     $('badge').textContent = badge;
     $('badge').className = 'cn-chip' + (r.running && !bad ? ' on' : bad ? ' bad' : '');
@@ -369,9 +415,23 @@
     if (!t || !t.dataset || !t.dataset.act) return;
     switch (t.dataset.act) {
       case 'start': send({ do: 'start' }); break;
+      case 'refresh':
+        send({ do: 'refresh' }, { waitMs: 15000, busyBtn: '[data-act="refresh"]', busyText: '刷新中…', busyStatus: '正在重新读取 Clash 订阅与节点…' });
+        break;
       case 'pool-save':
         send({ do: 'setPool', nodes: pickedFromDom() }, { busyBtn: '[data-act="pool-save"]', busyText: '保存中…' });
         break;
+      case 'profiles-save': {
+        var boxes = $('poolBody').querySelectorAll('input[data-kind="profile"]');
+        var ids = [];
+        for (var i = 0; i < boxes.length; i++) if (boxes[i].checked) ids.push(boxes[i].dataset.id);
+        var all = (S.profiles || []).length;
+        send({ do: 'setProfiles', profiles: ids.length === all ? [] : ids }, {
+          waitMs: 15000, busyBtn: '[data-act="profiles-save"]', busyText: '切换中…',
+          busyStatus: '正在按所选订阅重建节点端口…',
+        });
+        break;
+      }
       case 'pool-test':
         send({ do: 'test' }, { waitMs: 28000, busyBtn: '[data-act="pool-test"]', busyText: '测速中…', busyStatus: '正在测全部节点延迟（约 10–20 秒）…' });
         break;
@@ -416,6 +476,11 @@
       if (b) b.textContent = (n ? '已选 ' + n : '全部') + ' / ' + (S.nodes || []).length;
       return;
     }
+    if (t.dataset && t.dataset.kind === 'profile') {
+      var lab = t.closest('label');
+      if (lab) lab.classList.toggle('on', t.checked);
+      return;
+    }
     var id = currentId;
     if (!id) return;
     var d = draftFor(id);
@@ -456,6 +521,10 @@
     try { await magpie.read('providers:list', {}); } catch (e) { /* optional read */ }
     $('app').addEventListener('click', onClick);
     $('app').addEventListener('change', onChange);
+    $('poolBody').addEventListener('toggle', function (ev) {
+      var d = ev.target;
+      if (d && d.dataset && d.dataset.prof !== undefined) openProfiles[d.dataset.prof] = !!d.open;
+    }, true);
     $('apply').addEventListener('click', apply);
     $('restore').addEventListener('click', function () {
       if (window.confirm && !window.confirm('把所有供应商和账号的节点设置恢复成本来的样子？')) return;
