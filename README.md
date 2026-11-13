@@ -47,6 +47,17 @@ magpie plugin add github:player462/magpie-clash-nodes
 - 账号列表读取 magpie 的 `logins.json` + `providers.json`；也可用配套 CLI 刷新缓存（可选）。
 - 所有状态存在 `~/.config/magpie/clash-nodes/`，卸载插件即弃。
 
+## 会不会干扰系统代理？
+
+**不会。** 插件与系统代理完全隔离：
+
+- 系统代理（Windows `Internet Settings` 的 `ProxyEnable` / `ProxyServer`）由 Clash Party 自己设置，插件从不读写这些键，代码里没有任何注册表 / `netsh` / WinHTTP 调用。
+- 插件启动的独立 mihomo 实例：`mixed-port`、`port`、`socks-port`、`redir-port`、`tproxy-port` 全为 `0`，`tun.enable=false`，`dns.enable=false`，`allow-lan=false`，只监听 `127.0.0.1:18001+` 的 `listeners`。它不接管流量、不建虚拟网卡、不改路由或 DNS。
+- 与 Clash Party 主进程**不同工作目录、不同配置、不同端口、不同进程**；停止插件实例只按自己记录的 pid 杀自己的进程，不会动 Clash Party。
+- 唯一影响是 **magpie 自己的请求**：写 `providers.json` 的 `proxy` / `accountProxies`，让指定供应商/账号走 18001+ 端口。其他软件、浏览器、系统流量仍走 Clash 的 7890。
+- 附带的 CLI 有 `clash-nodes select "节点名"`，那是**主动**切换 Clash 当前节点（会改变系统代理出口），插件页面本身不调用它。
+- 若 18001+ 被其他软件占用，实例会启动失败并报错，不会去改系统代理或抢占 7890。
+
 ## 工作原理（为什么页面长这样）
 
 magpie 插件页跑在 `sandbox="allow-scripts"` + `connect-src 'none'` 的 iframe 里：没有 fetch、没有内联脚本。页面与插件的唯一通道是 `magpie.options.set()`（触发 Bun 插件 host 重载）：
