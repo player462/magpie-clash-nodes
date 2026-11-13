@@ -59,6 +59,8 @@ node build.mjs
 magpie plugin off github:player462/magpie-clash-nodes ; magpie plugin on github:player462/magpie-clash-nodes
 ```
 
+> 提交前把 `page/state.js` 重置为占位符：插件运行时会把它改写成当前账号/节点状态，那是本机隐私数据，不能进仓库。
+
 `lib/` 是零依赖 Node/Bun 代码（mihomo 命名管道控制器、每节点监听实例、providers.json 读写）。
 
 ## 致谢与许可
