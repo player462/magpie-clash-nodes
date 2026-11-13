@@ -8,6 +8,9 @@ magpie plugin add github:player462/magpie-clash-nodes
 
 装好后，magpie 侧栏 **Plugins** 组会多出一个「**梯子节点**」标签页（跟随窗口浅色/深色主题）。
 
+> **插件市场**：仓库已打上 GitHub topic `magpie-plugin`，会出现在 magpie 的 **Plugins → Discover → Unofficial, on GitHub**（按 star 排序，可搜索 `Clash` 或 `player462`）。从市场卡片直接 Install 即从本仓库安装，无需 npm。
+> 要被收录进 **Community** 分区（`magpie-community/plugins` 的 `registry.json`），需要以 `@magpie-community/page-clash-nodes` 提交 PR 并由维护者审核；本仓库保持独立发布。
+
 ## 功能
 
 页面从上到下就三块：

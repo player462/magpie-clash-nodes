@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./index.mjs",
   "files": ["index.mjs", "lib", "page", "README.md"],
-  "keywords": ["magpie", "magpie-plugin", "clash", "mihomo", "proxy", "nodes"],
+  "keywords": ["magpie", "magpie-plugin", "magpie-page", "clash", "mihomo", "proxy", "nodes"],
   "license": "MIT",
   "repository": {
     "type": "git",
