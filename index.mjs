@@ -404,7 +404,9 @@ async function execute(cmd, c) {
 async function run(options) {
   const prev = readJson(STATE_JSON, {});
   let error = null;
-  let last = prev.last || null;
+  // A message from an earlier session is not news: show one only when this
+  // run actually executed a command.
+  let last = null;
   const c = createController({ group: options.group || '' });
 
   try {
