@@ -497,8 +497,31 @@ async function run(options) {
   return state;
 }
 
+// The page's provider/account requests go straight to 127.0.0.1:180xx, so a
+// dead router must be repaired even when nobody is looking at the plugin page.
+// Every plugin-host generation keeps one lightweight timer; `unref` lets the
+// host exit normally when magpie closes.
+let watchdogTimer = null;
+let watchdogBusy = false;
+function startWatchdog() {
+  if (watchdogTimer) return;
+  watchdogTimer = setInterval(async () => {
+    if (watchdogBusy) return;
+    const r = router.routerStatus();
+    if (!r.running) return;
+    if (await router.instanceAlive().catch(() => false)) return;
+    watchdogBusy = true;
+    try {
+      await ensureRouter(createController({}));
+    } catch { /* next tick retries; page still shows the error */ }
+    finally { watchdogBusy = false; }
+  }, 15000);
+  if (typeof watchdogTimer.unref === 'function') watchdogTimer.unref();
+}
+
 /** Only this function is exported: magpie calls every exported function as a plugin. */
 export const ClashNodesPlugin = async (_input, options = {}) => {
   try { await run(options || {}); } catch { /* never break plugin init */ }
+  try { startWatchdog(); } catch { /* timer is best effort */ }
   return {};
 };

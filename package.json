@@ -1,6 +1,6 @@
 {
   "name": "magpie-clash-nodes",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "magpie 原生页面：给整个供应商、或同一供应商的每个账号，分别指定 Clash 梯子节点",
   "type": "module",
   "main": "./index.mjs",
