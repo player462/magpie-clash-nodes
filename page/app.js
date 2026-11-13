@@ -1,12 +1,13 @@
-/* One magpie page, two dropdowns. The plugin host writes state.js after every
-   command; this page reloads that file through an external <script> (allowed
-   by the page's CSP) instead of inlining it in <head>. */
+/* One magpie page. The plugin host rewrites state.js after every command; this
+   page reloads it as an external script (CSP-friendly) and keeps per-provider
+   edits in `drafts` so switching the provider dropdown never loses them. */
 (function () {
   'use strict';
 
   var S = {};
   var sending = false;
-  var perAccount = false;
+  var currentId = '';
+  var drafts = {};           // providerId -> { perAccount, provider, accounts: {key: value} }
   var $ = function (id) { return document.getElementById(id); };
 
   function esc(v) {
@@ -17,7 +18,7 @@
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
   function setStatus(text, ok) {
     var el = $('status');
-    el.textContent = text;
+    el.textContent = text || '';
     el.className = 'cn-status' + (ok === true ? ' ok' : ok === false ? ' bad' : '');
   }
   function loadState() {
@@ -31,7 +32,7 @@
   }
   async function send(cmd, opts) {
     opts = opts || {};
-    if (sending) return;
+    if (sending) return false;
     sending = true;
     var waitMs = opts.waitMs || 9000;
     var all = document.querySelectorAll('#app button');
@@ -46,7 +47,6 @@
       await magpie.options.set(Object.assign({}, o, {
         cmd: cmd, cmdId: Date.now() + '-' + Math.random().toString(36).slice(2, 9),
       }));
-      // the host rewrites state.js when it is done; poll until it lands
       var deadline = Date.now() + waitMs;
       for (;;) {
         await wait(1200);
@@ -59,10 +59,13 @@
           break;
         }
       }
+      if (opts.clearDraftFor) delete drafts[opts.clearDraftFor];
       render();
       setStatus(S.last ? S.last.message : (S.error || '完成'), S.error ? false : (S.last ? S.last.ok : true));
+      return true;
     } catch (e) {
       setStatus('失败: ' + (e && e.message ? e.message : e), false);
+      return false;
     } finally {
       sending = false;
       for (var j = 0; j < all.length; j++) all[j].disabled = false;
@@ -70,6 +73,39 @@
     }
   }
 
+  // ---------- data helpers ----------
+  function providerOf(id) {
+    return (S.providers || []).filter(function (p) { return p.id === id; })[0] || null;
+  }
+  function providerName(id) {
+    var p = providerOf(id);
+    return p ? (p.name || p.id) : id;
+  }
+  function accountsOf(id) {
+    return (S.accounts || []).filter(function (a) { return a.providerId === id; });
+  }
+  function accountByKey(id, key) {
+    return accountsOf(id).filter(function (a) { return a.key === key; })[0] || null;
+  }
+  function savedProviderProxy(id) {
+    var p = providerOf(id);
+    return p ? (p.proxy || '') : '';
+  }
+  function savedAccountProxy(id, key) {
+    var a = accountByKey(id, key);
+    return a ? (a.proxy || '') : '';
+  }
+  function draftFor(id) {
+    if (!drafts[id]) drafts[id] = { perAccount: null, provider: null, accounts: {} };
+    return drafts[id];
+  }
+  function perAccountOn(id) {
+    var d = drafts[id];
+    if (d && d.perAccount !== null) return d.perAccount;
+    // a provider that already has per-account proxies opens in account mode,
+    // so switching away and back lands on the saved choices
+    return accountsOf(id).some(function (a) { return !!a.proxy; });
+  }
   function nodeEntries() {
     var r = S.router || {};
     if (!r.running) return [];
@@ -78,14 +114,34 @@
     return Object.keys(r.mapping || {}).map(function (name) {
       var n = byName[name] || {};
       return {
-        name: name, url: 'http://127.0.0.1:' + r.mapping[name],
-        region: n.region || '其他', delay: n.delay,
+        name: name,
+        url: 'http://127.0.0.1:' + r.mapping[name],
+        region: n.region || '其他',
+        delay: n.delay,
       };
     });
   }
-  function nodeOptions(current, followLabel) {
-    var h = '<option value=""' + (!current ? ' selected' : '') + '>' + esc(followLabel) + '</option>' +
-      '<option value="direct"' + (current === 'direct' ? ' selected' : '') + '>⇋ 直连（不走梯子）</option>';
+  function urlInPool(url) {
+    return nodeEntries().some(function (n) { return n.url === url; });
+  }
+  function nodeNameOf(url) {
+    var hit = nodeEntries().filter(function (n) { return n.url === url; })[0];
+    return hit ? hit.name : '';
+  }
+  function isStaleSaved(url) {
+    return !!url && url !== 'direct' && !urlInPool(url);
+  }
+
+  function nodeOptions(current, mode) {
+    var follow = mode === 'provider' ? '跟随全局（不指定）'
+      : mode === 'batch' ? '批量设置所有账号…'
+      : '跟随供应商';
+    var h = '<option value=""' + (!current ? ' selected' : '') + '>' + esc(follow) + '</option>' +
+      '<option value="direct"' + (current === 'direct' ? ' selected' : '') + '>⇢ 直连（不走梯子）</option>';
+    if (current && current !== 'direct' && !urlInPool(current)) {
+      h += '<option value="' + esc(current) + '" selected>⚠ 节点已失效（' +
+        esc(String(current).replace(/^https?:\/\//, '')) + '）</option>';
+    }
     var groups = {};
     nodeEntries().forEach(function (n) {
       var d = n.delay == null ? '' : ' · ' + n.delay + 'ms';
@@ -99,22 +155,53 @@
     });
     return h;
   }
-  function providerName(id) {
-    var p = (S.providers || []).filter(function (x) { return x.id === id; })[0];
-    return p ? (p.name || p.id) : id;
+
+  // ---------- dirty state ----------
+  function changedAccounts(id) {
+    var d = drafts[id];
+    if (!d) return [];
+    return Object.keys(d.accounts).filter(function (key) {
+      return d.accounts[key] !== savedAccountProxy(id, key);
+    });
+  }
+  function isDirty(id) {
+    if (!id) return false;
+    var d = drafts[id];
+    if (!d) return false;
+    var providerChanged = d.provider !== null && d.provider !== savedProviderProxy(id);
+    return providerChanged || changedAccounts(id).length > 0;
+  }
+  function paintDirty() {
+    var el = $('dirty');
+    if (!el) return;
+    el.hidden = !isDirty(currentId);
   }
 
-  function renderControls() {
-    var ns = $('nodeSelect'), ps = $('providerSelect');
-    var keepNode = ns.value, keepProvider = ps.value;
-    ns.innerHTML = nodeOptions(keepNode, perAccount ? '跟随供应商' : '跟随全局');
-    ps.innerHTML = (S.providers || []).map(function (p) {
-      return '<option value="' + esc(p.id) + '">' + esc(p.name || p.id) + '</option>';
-    }).join('');
-    if (keepNode) ns.value = keepNode;
-    if (keepProvider) ps.value = keepProvider;
-    if (!ps.value && (S.providers || []).length) ps.value = S.providers[0].id;
+  // ---------- rendering ----------
+  function renderBar() {
+    var ps = $('providerSelect'), ns = $('nodeSelect');
+    var sig = (S.providers || []).map(function (p) { return p.id; }).join('|');
+    if (ps.dataset.sig !== sig) {
+      ps.innerHTML = (S.providers || []).map(function (p) {
+        return '<option value="' + esc(p.id) + '">' + esc(p.name || p.id) + '</option>';
+      }).join('');
+      ps.dataset.sig = sig;
+    }
+    if (!currentId || !(S.providers || []).some(function (p) { return p.id === currentId; })) {
+      currentId = (S.providers || [])[0] ? (S.providers[0].id) : '';
+    }
+    if (currentId) ps.value = currentId;
+
+    var d = draftFor(currentId);
+    var on = perAccountOn(currentId);
+    $('perAccount').checked = on;
+    $('nodeLabel').textContent = on ? '批量设置' : '节点';
+    ns.innerHTML = nodeOptions(d.provider !== null ? d.provider : savedProviderProxy(currentId),
+      on ? 'batch' : 'provider');
+    if (!on) ns.value = d.provider !== null ? d.provider : savedProviderProxy(currentId);
+    else ns.value = '';
     ns.disabled = nodeEntries().length === 0;
+    paintDirty();
   }
 
   function delayPill(n) {
@@ -135,32 +222,34 @@
     Object.keys(byRegion).sort().forEach(function (rg) {
       var list = byRegion[rg];
       var picked = list.filter(function (n) { return pool.indexOf(n.name) >= 0; }).length;
-      parts.push('<div class="cn-region">' + esc(rg) +
-        ' <span>' + (picked ? picked + '/' : '') + list.length + '</span></div>');
+      parts.push('<div class="cn-region"><span class="cn-region-name">' + esc(rg) + '</span>' +
+        '<span class="cn-region-count">' + (picked ? picked + ' / ' : '') + list.length + '</span></div>');
       list.forEach(function (n) {
         var inPool = pool.indexOf(n.name) >= 0;
         var port = inst.indexOf(n.name) >= 0 ? (S.router.mapping[n.name] || '') : '';
         parts.push('<label class="cn-pick' + (inPool ? ' on' : '') + '">' +
           '<input type="checkbox" data-kind="pick" data-node="' + esc(n.name) + '"' + (inPool ? ' checked' : '') + '>' +
-          '<span title="' + esc(n.name) + '">' + esc(n.name) + '</span>' +
+          '<span class="cn-pick-name" title="' + esc(n.name) + '">' + esc(n.name) + '</span>' +
           delayPill(n) +
           (port ? '<i class="cn-port">:' + port + '</i>' : '') +
           '</label>');
       });
     });
-    sum.innerHTML = '可用节点池 <b>' + (pool.length ? '已选 ' + pool.length : '全部') + '</b>' +
-      ' <span class="cn-dim">/ ' + names.length + ' 个节点</span>' +
-      (drift.missing.length ? ' <span class="cn-badtext">· ' + drift.missing.length + ' 个已失效</span>' : '') +
-      (drift.added.length ? ' <span class="cn-oktext">· ' + drift.added.length + ' 个新节点</span>' : '') +
-      (S.staleInstance ? ' <span class="cn-badtext">· 端口待同步</span>' : '');
+    var flags = [];
+    if (drift.missing.length) flags.push('<span class="cn-flag bad">' + drift.missing.length + ' 个节点已失效</span>');
+    if (drift.added.length) flags.push('<span class="cn-flag ok">' + drift.added.length + ' 个新节点</span>');
+    if (S.staleInstance) flags.push('<span class="cn-flag bad">端口待同步</span>');
+    sum.innerHTML = '<span class="cn-sum-title">可用节点池</span>' +
+      '<span class="cn-sum-count">' + (pool.length ? '已选 ' + pool.length : '全部') + ' / ' + names.length + '</span>' +
+      flags.join('');
     body.innerHTML =
-      '<p class="cn-muted">勾选的节点才会开成本地端口，供应商和账号的下拉只从池子里选；不勾 = 全部可用。Clash 换订阅后这里会提示增减，点保存即同步。</p>' +
+      '<p class="cn-note">勾选的节点才会开成本地端口；供应商和账号的下拉只从池子里选。不勾 = 全部可用，Clash 换订阅后这里会提示增减。</p>' +
       '<div class="cn-grid">' + parts.join('') + '</div>' +
       '<div class="cn-actions">' +
-      '<button type="button" class="cn-primary" data-act="pool-save">保存节点池并同步端口</button>' +
-      '<button type="button" data-act="pool-test">⚡ 测全部延迟</button>' +
-      '<button type="button" data-act="pool-all">全选</button>' +
-      '<button type="button" data-act="pool-none">清空</button>' +
+      '<button type="button" class="cn-btn primary" data-act="pool-save">保存并同步端口</button>' +
+      '<button type="button" class="cn-btn" data-act="pool-test">⚡ 测全部延迟</button>' +
+      '<button type="button" class="cn-btn ghost" data-act="pool-all">全选</button>' +
+      '<button type="button" class="cn-btn ghost" data-act="pool-none">清空</button>' +
       '</div>';
   }
 
@@ -172,78 +261,106 @@
   }
 
   function renderDetail() {
-    var id = $('providerSelect').value;
-    var accs = (S.accounts || []).filter(function (a) { return a.providerId === id; });
-    var p = (S.providers || []).filter(function (x) { return x.id === id; })[0] || {};
+    var id = currentId;
     var detail = $('detail');
+    var accs = accountsOf(id);
+    var p = providerOf(id) || {};
+    var d = draftFor(id);
+    var on = perAccountOn(id);
 
     if (!nodeEntries().length) {
-      detail.innerHTML = '<div class="cn-card"><h2>还没有可选的节点</h2>' +
-        '<p>给梯子里的节点各开一个本地端口后，就能在这里给供应商和账号指派节点。这不会动 Clash 正在用的 7890 端口。</p>' +
-        '<div class="cn-actions"><button type="button" class="cn-primary" data-act="start">一键准备节点端口</button></div></div>';
+      detail.innerHTML = '<div class="cn-empty-state">' +
+        '<div class="cn-empty-title">还没有可用的节点端口</div>' +
+        '<p class="cn-note">给梯子里的节点各开一个本地端口，就能在这里给供应商和账号指派节点。不会动 Clash 正在用的 7890 端口。</p>' +
+        '<button type="button" class="cn-btn primary" data-act="start">一键准备节点端口</button></div>';
       return;
     }
 
-    if (perAccount) {
-      var rows = accs.map(function (a, i) {
-        return '<tr><td class="cn-dim">' + (i + 1) + '</td>' +
-          '<td class="cn-name">' + esc(a.label) + (a.active ? ' <span class="cn-tag on">使用中</span>' : '') + '</td>' +
-          '<td><span class="cn-tag' + (a.node && a.node !== '跟随供应商' ? ' on' : '') + '">' + esc(a.node || '跟随供应商') + '</span></td>' +
-          '<td><select data-kind="account-select" data-account="' + esc(a.key) + '">' +
-          nodeOptions(a.proxy || '', '跟随供应商') + '</select></td></tr>';
-      }).join('');
-      detail.innerHTML = '<div class="cn-card"><h2>' + esc(providerName(id)) + ' 的账号各走各的节点</h2>' +
-        '<p>改完点「应用」一次生效；账号选「跟随供应商」则不单独设。顶部节点下拉可以先把所有账号填成同一个节点，再单独调个别账号。</p>' +
-        (rows ? '<table><thead><tr><th>#</th><th>账号</th><th>现在走</th><th>改成</th></tr></thead><tbody>' + rows + '</tbody></table>'
-              : '<p class="cn-empty">这个供应商没有可单独分配的账号——整个供应商的设置已在上面生效。</p>') +
+    if (!on) {
+      var cur = savedProviderProxy(id);
+      var stale = p.stale || isStaleSaved(cur);
+      detail.innerHTML = '<div class="cn-card">' +
+        '<div class="cn-card-head"><h2>' + esc(providerName(id)) + ' · 整个供应商</h2>' +
+        '<span class="cn-tag' + (cur ? ' on' : '') + '">' + esc(p.node || '全局代理') + '</span></div>' +
+        (stale ? '<div class="cn-warn"><span>原先指定的节点已失效（' +
+          esc(String(cur).replace(/^https?:\/\//, '')) + '），请重新选择后点「应用」。</span>' +
+          '<button type="button" class="cn-warn-fix" data-act="fix-stale">改用第一个可用节点</button></div>' : '') +
+        '<p class="cn-note">' + (accs.length
+          ? '这个供应商的 ' + accs.length + ' 个账号都跟随这里的设置。要给某个账号单独指定，打开「按账号分配」。'
+          : '这个供应商没有可单独分配的账号。') + '</p>' +
         '</div>';
       return;
     }
 
-    detail.innerHTML = '<div class="cn-card"><h2>' + esc(providerName(id)) + ' · 整个供应商</h2>' +
-      '<p>现在走：<b class="' + (p.node && p.node !== '全局代理' && p.node !== '跟随供应商' ? 'cn-now' : '') + '">' + esc(p.node || '全局代理') + '</b>' +
-      (accs.length ? '，' + accs.length + ' 个账号都跟着这个设置走。要给某个账号单独指派节点，勾选「按账号分配」。' : '。') +
-      '</p></div>';
+    var staleCount = accs.filter(function (a) { return a.stale; }).length;
+    var rows = accs.map(function (a, i) {
+      var saved = savedAccountProxy(id, a.key);
+      var value = d.accounts[a.key] !== undefined ? d.accounts[a.key] : saved;
+      var changed = value !== saved;
+      var isStale = a.stale;
+      var shown = a.node || '跟随供应商';
+      return '<tr class="' + (isStale ? 'stale ' : '') + (changed ? 'changed' : '') + '">' +
+        '<td class="cn-idx">' + (i + 1) + '</td>' +
+        '<td class="cn-acc"><div class="cn-acc-name">' + esc(a.label) +
+        (a.active ? '<span class="cn-mini on">使用中</span>' : '') + '</div>' +
+        (a.plan ? '<div class="cn-acc-sub">' + esc(a.plan) + '</div>' : '') + '</td>' +
+        '<td class="cn-cur"><span class="cn-tag' + (isStale ? ' bad' : a.node && a.node !== '跟随供应商' ? ' on' : '') + '">' +
+        (isStale ? '⚠ ' : '') + esc(shown) + '</span></td>' +
+        '<td class="cn-target"><select data-kind="account-select" data-account="' + esc(a.key) + '">' +
+        nodeOptions(value, 'account') + '</select>' +
+        (changed ? '<span class="cn-pending">待应用</span>' : '') + '</td></tr>';
+    }).join('');
+
+    detail.innerHTML = '<div class="cn-card">' +
+      '<div class="cn-card-head"><h2>' + esc(providerName(id)) + ' · 按账号</h2>' +
+      '<span class="cn-count">' + accs.length + ' 个账号</span></div>' +
+      (staleCount ? '<div class="cn-warn"><span>' + staleCount + ' 个账号原先的节点已失效，请重新选择后点「应用」。</span>' +
+        '<button type="button" class="cn-warn-fix" data-act="fix-stale">自动匹配可用节点</button></div>' : '') +
+      (accs.length
+        ? '<table class="cn-table"><thead><tr><th class="cn-idx">#</th><th>账号</th><th>现在走</th><th>改成</th></tr></thead><tbody>' + rows + '</tbody></table>'
+        : '<p class="cn-note">这个供应商没有可单独分配的账号。</p>') +
+      '<p class="cn-note cn-card-foot">只提交你改过的行；没动过的账号保持原来的节点。</p>' +
+      '</div>';
   }
 
   function render() {
-    renderControls();
+    renderBar();
     renderPicker();
     renderDetail();
     var r = S.router || {};
     var drift = S.drift || { missing: [], added: [] };
-    var badge = r.running ? (r.nodes || []).length + ' 个节点就绪 · 梯子当前 ' + (S.current || '—')
-      : '节点未就绪，应用时自动准备';
-    if (drift.missing.length || drift.added.length || S.staleInstance) badge += ' · 节点池有变化';
+    var bad = !!S.staleInstance || drift.missing.length > 0;
+    var badge = r.running ? (r.nodes || []).length + ' 个节点就绪' : '节点未就绪';
+    if (bad) badge += ' · 需同步';
     $('badge').textContent = badge;
-    $('badge').className = 'cn-pill' + (r.running && !S.staleInstance && !drift.missing.length ? ' on' : '');
-    if (S.last) setStatus(S.last.message, S.last.ok);
+    $('badge').className = 'cn-chip' + (r.running && !bad ? ' on' : bad ? ' bad' : '');
+    var lastOk = S.last && S.last.at && (Date.now() - Date.parse(S.last.at) < 5 * 60 * 1000);
+    if (lastOk) setStatus(S.last.message, S.last.ok);
     else if (S.error) setStatus(S.error, false);
     else setStatus('');
+    paintDirty();
   }
 
+  // ---------- actions ----------
   function apply() {
-    var id = $('providerSelect').value;
+    var id = currentId;
     if (!id) return;
-    if (perAccount) {
+    var on = perAccountOn(id);
+    var d = draftFor(id);
+    if (on) {
+      var changed = changedAccounts(id);
+      if (!changed.length) { setStatus('没有需要应用的更改。', true); return; }
       var plans = {};
-      var selects = $('detail').querySelectorAll('[data-kind="account-select"]');
-      var changed = 0;
-      for (var i = 0; i < selects.length; i++) {
-        // only send rows the user actually touched, so an untouched
-        // "follow" row never wipes an existing per-account setting
-        var sel = selects[i];
-        plans[id] = plans[id] || {};
-        plans[id][sel.dataset.account] = sel.value;
-        if (sel.value) changed++;
-      }
-      if (!changed) { setStatus('没有勾选任何节点——留空的账号会继续跟随供应商。确认要全部跟随就直接应用。', true); }
-      send({ do: 'assignAccountPlans', plans: plans });
+      plans[id] = {};
+      changed.forEach(function (key) { plans[id][key] = d.accounts[key]; });
+      send({ do: 'assignAccountPlans', plans: plans }, { clearDraftFor: id, busyStatus: '正在应用 ' + changed.length + ' 个账号…' });
     } else {
-      var v = $('nodeSelect').value;
-      send({ do: 'assignProvider', id: id, proxy: v });
-      var label = v === '' ? '跟随全局' : v === 'direct' ? '直连' : $('nodeSelect').options[$('nodeSelect').selectedIndex].text;
-      setStatus('把 ' + providerName(id) + ' 设为 ' + label + '…');
+      var value = d.provider !== null ? d.provider : savedProviderProxy(id);
+      if (d.provider === null || d.provider === savedProviderProxy(id)) {
+        setStatus('没有需要应用的更改。', true);
+        return;
+      }
+      send({ do: 'assignProvider', id: id, proxy: value }, { clearDraftFor: id });
     }
   }
 
@@ -251,53 +368,86 @@
     var t = ev.target;
     if (!t || !t.dataset || !t.dataset.act) return;
     switch (t.dataset.act) {
-      case 'start':
-        send({ do: 'start' });
-        break;
+      case 'start': send({ do: 'start' }); break;
       case 'pool-save':
         send({ do: 'setPool', nodes: pickedFromDom() }, { busyBtn: '[data-act="pool-save"]', busyText: '保存中…' });
         break;
       case 'pool-test':
-        send({ do: 'test' }, { waitMs: 25000, busyBtn: '[data-act="pool-test"]', busyText: '测速中…', busyStatus: '正在测全部节点延迟（约 10–20 秒）…' });
+        send({ do: 'test' }, { waitMs: 28000, busyBtn: '[data-act="pool-test"]', busyText: '测速中…', busyStatus: '正在测全部节点延迟（约 10–20 秒）…' });
         break;
-      case 'pool-all': {
-        var boxes = $('poolBody').querySelectorAll('input[data-kind="pick"]');
-        for (var i = 0; i < boxes.length; i++) boxes[i].checked = true;
+      case 'pool-all':
+        Array.prototype.forEach.call($('poolBody').querySelectorAll('input[data-kind="pick"]'), function (b) { b.checked = true; });
         break;
-      }
-      case 'pool-none': {
-        var boxes2 = $('poolBody').querySelectorAll('input[data-kind="pick"]');
-        for (var j = 0; j < boxes2.length; j++) boxes2[j].checked = false;
+      case 'pool-none':
+        Array.prototype.forEach.call($('poolBody').querySelectorAll('input[data-kind="pick"]'), function (b) { b.checked = false; });
+        break;
+      case 'fix-stale': {
+        var id = currentId;
+        var d = draftFor(id);
+        var nodes = nodeEntries();
+        if (!nodes.length) { setStatus('没有可用节点，请先在节点池里保存。', false); break; }
+        if (perAccountOn(id)) {
+          var fixed = 0;
+          accountsOf(id).forEach(function (a) {
+            if (!a.stale) return;
+            var providerProxy = savedProviderProxy(id);
+            d.accounts[a.key] = (providerProxy && providerProxy !== 'direct' && urlInPool(providerProxy))
+              ? providerProxy : nodes[0].url;
+            fixed++;
+          });
+          renderDetail(); paintDirty();
+          setStatus('已为 ' + fixed + ' 个失效账号选好替代节点，点「应用」生效。', true);
+        } else {
+          d.provider = nodes[0].url;
+          renderBar(); renderDetail(); paintDirty();
+          setStatus('已选第一个可用节点，点「应用」生效。', true);
+        }
         break;
       }
     }
   }
+
   function onChange(ev) {
     var t = ev.target;
     if (!t) return;
     if (t.dataset && t.dataset.kind === 'pick') {
-      var poolBody = $('poolBody');
-      var n = poolBody.querySelectorAll('input[data-kind="pick"]:checked').length;
-      var sum = $('poolSummary');
-      var b = sum.querySelector('b');
-      if (b) b.textContent = n ? '已选 ' + n : '全部';
+      var n = $('poolBody').querySelectorAll('input[data-kind="pick"]:checked').length;
+      var b = $('poolSummary').querySelector('.cn-sum-count');
+      if (b) b.textContent = (n ? '已选 ' + n : '全部') + ' / ' + (S.nodes || []).length;
       return;
     }
+    var id = currentId;
+    if (!id) return;
+    var d = draftFor(id);
+
     if (t.id === 'perAccount') {
-      perAccount = !!t.checked;
-      var ns = $('nodeSelect');
-      // The top dropdown's empty value means different things in the two
-      // modes; keep whichever the user is looking at honest.
-      ns.options[0].textContent = perAccount ? '跟随供应商' : '跟随全局';
-      renderControls(); renderDetail();
-      if (perAccount) setStatus('给每个账号选节点；顶部节点下拉可先统一填一遍，再单独调。', true);
+      d.perAccount = !!t.checked;
+      renderBar(); renderDetail();
+      setStatus(t.checked ? '给每个账号选节点；顶部下拉可批量填充，再单独调整。' : '', true);
+      return;
     }
-    if (t.id === 'providerSelect') renderDetail();
-    if (t.id === 'nodeSelect' && perAccount && t.value) {
-      var selects = $('detail').querySelectorAll('[data-kind="account-select"]');
-      var m = 0;
-      for (var i = 0; i < selects.length; i++) { selects[i].value = t.value; m++; }
-      if (m) setStatus('已把 ' + m + ' 个账号填成同一个节点，点「应用」生效。', true);
+    if (t.id === 'providerSelect') {
+      currentId = t.value;
+      render();
+      return;
+    }
+    if (t.id === 'nodeSelect') {
+      if (perAccountOn(id)) {
+        if (!t.value) return;
+        // bulk fill: every account gets this node, still only in the draft
+        accountsOf(id).forEach(function (a) { d.accounts[a.key] = t.value; });
+        t.value = '';
+        renderDetail(); paintDirty();
+        setStatus('已批量填入 ' + accountsOf(id).length + ' 个账号，点「应用」生效。', true);
+      } else {
+        d.provider = t.value;
+        paintDirty();
+      }
+      return;
+    }
+    if (t.dataset.kind === 'account-select') {
+      d.accounts[t.dataset.account] = t.value;
+      renderDetail(); paintDirty();
     }
   }
 
@@ -309,10 +459,12 @@
     $('apply').addEventListener('click', apply);
     $('restore').addEventListener('click', function () {
       if (window.confirm && !window.confirm('把所有供应商和账号的节点设置恢复成本来的样子？')) return;
+      drafts = {};
       send({ do: 'restore' });
     });
     S = await loadState();
     render();
+    setStatus(''); // a message from an earlier session is not news
   }
   main().catch(function (e) { setStatus('启动失败: ' + (e && e.message ? e.message : e), false); });
 })();

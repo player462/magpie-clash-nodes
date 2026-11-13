@@ -11,28 +11,56 @@
 <body>
   <main id="app">
     <header class="cn-head">
-      <div>
-        <h1>梯子节点</h1>
-        <p class="cn-muted">给供应商、或它的每个账号，分别指定 Clash 节点</p>
+      <div class="cn-brand">
+        <span class="cn-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="12" cy="12" r="3.1"></circle>
+            <circle cx="12" cy="12" r="7.6" opacity=".55"></circle>
+            <circle cx="12" cy="4.4" r="1.5" fill="currentColor" stroke="none"></circle>
+            <circle cx="19.6" cy="12" r="1.5" fill="currentColor" stroke="none"></circle>
+            <circle cx="12" cy="19.6" r="1.5" fill="currentColor" stroke="none"></circle>
+            <circle cx="4.4" cy="12" r="1.5" fill="currentColor" stroke="none"></circle>
+          </svg>
+        </span>
+        <div class="cn-titlebox">
+          <h1>梯子节点</h1>
+          <p class="cn-sub">给供应商、或它的每个账号，分别指定 Clash 节点</p>
+        </div>
       </div>
-      <span id="badge" class="cn-pill">载入中…</span>
+      <span id="badge" class="cn-chip">载入中…</span>
     </header>
 
-    <section class="cn-controls">
-      <label class="cn-field"><span>供应商</span><select id="providerSelect"></select></label>
-      <label class="cn-field"><span>节点</span><select id="nodeSelect"></select></label>
-      <label class="cn-check"><input type="checkbox" id="perAccount"><span>按账号分配</span></label>
-      <span class="cn-spacer"></span>
-      <button type="button" id="apply">应用</button>
-      <button type="button" id="restore">还原</button>
+    <section class="cn-bar">
+      <label class="cn-field">
+        <span>供应商</span>
+        <select id="providerSelect"></select>
+      </label>
+      <label class="cn-field cn-field-grow">
+        <span id="nodeLabel">节点</span>
+        <select id="nodeSelect"></select>
+      </label>
+      <label class="cn-switch" title="开启后，这个供应商的每个账号可以各走一个节点">
+        <input type="checkbox" id="perAccount">
+        <i aria-hidden="true"></i>
+        <span>按账号分配</span>
+      </label>
+      <div class="cn-bar-actions">
+        <span id="dirty" class="cn-dirty" hidden>未保存</span>
+        <button type="button" class="cn-btn primary" id="apply">应用</button>
+        <button type="button" class="cn-btn ghost" id="restore">还原</button>
+      </div>
     </section>
 
     <div id="status" class="cn-status"></div>
-    <details id="pool" class="cn-picker">
-      <summary id="poolSummary"></summary>
+
+    <details id="pool" class="cn-pool">
+      <summary><span id="poolSummary"></span></summary>
       <div id="poolBody"></div>
     </details>
-    <section id="detail"></section>
+
+    <section id="detail" class="cn-detail"></section>
+
+    <p class="cn-foot">写入 magpie 的 <code>providers.json</code>，下一个请求即生效 · 「还原」恢复改动前的代理设置</p>
   </main>
   <script src="__FALLBACK__"></script>
 </body>

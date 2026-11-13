@@ -249,6 +249,13 @@ async function run(options) {
     }
   } catch (e) { error = e?.message || String(e); }
 
+  // Keep the per-node ports alive across magpie restarts: assignments in
+  // providers.json point at them, so a dead instance means broken providers.
+  if (options.autoStart !== false) {
+    try { await ensureRouter(c); }
+    catch (e) { if (!error) error = `节点端口自动准备失败：${e?.message || e}`; }
+  }
+
   let state;
   try { state = await collect(c, error); }
   catch (e) {
