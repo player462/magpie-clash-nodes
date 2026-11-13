@@ -45,7 +45,7 @@ magpie plugin add github:player462/magpie-clash-nodes
 ## 依赖与说明
 
 - **Clash Party / mihomo 正在运行**（通过其 Windows 命名管道外部控制器通信；Clash Verge 等 TCP 控制器也支持，`MIHOMO_HOST/PORT/SECRET` 环境变量可指定）。
-- 多订阅读取 Clash Party 的 `profile.yaml` 与 `profiles/<id>.yaml`，兼容两种订阅格式：块式 `- name: …` 和流式 `- { name: '…', type: … }`；机场的流量/到期广告节点会被过滤。
+- 多订阅读取 Clash Party 的 `profile.yaml` 与 `profiles/<id>.yaml`，兼容两种订阅格式：块式 `- name: …` 和流式 `- { name: '…', type: … }`；不同机场的列表缩进（2/4 空格）会在合并时统一，生成后先用 `mihomo -t` 校验再启动，避免配置错误导致端口静默全断。机场的流量/到期广告节点会被过滤。
 - 勾选节点保存后，会启动一个**独立的 mihomo 实例**，把每个池内节点绑到 `127.0.0.1:18001+` 的一个本地 HTTP 端口——**不动**你正在用的 7890 / 系统代理 / TUN / 订阅。实例若意外退出，下次任何分配操作会自动重建（状态做活性检测，不谎报）。
 - 每个节点固定端口（`ports.json`），换订阅 / 重建实例都不会让某个账号悄悄走到别的节点；旧版本的裸节点名会自动迁移到新命名。
 - 账号列表读取 magpie 的 `logins.json` + `providers.json`；也可用配套 CLI 刷新缓存（可选）。
