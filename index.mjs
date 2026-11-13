@@ -409,10 +409,18 @@ async function run(options) {
   let last = null;
   const c = createController({ group: options.group || '' });
 
+  // magpie keeps the last options.set() in plugins.json and reloads the host
+  // with them. Without a freshness check an old command would replay on every
+  // restart (e.g. re-enabling a subscription the user had turned off). Page
+  // commands carry a Date.now() prefix; manual CLI commands (no timestamp)
+  // are trusted as-is.
+  const cmdTs = Number(String(options.cmdId || '').split('-')[0]);
+  const commandFresh = !Number.isFinite(cmdTs) || cmdTs < 1e12 ? true : (Date.now() - cmdTs < 120000);
+
   try {
     const cmd = options.cmd;
     const done = readJson(LAST_CMD, {});
-    if (cmd && options.cmdId && done.id !== options.cmdId) {
+    if (cmd && options.cmdId && done.id !== options.cmdId && commandFresh) {
       try { last = await execute(cmd, c); }
       catch (e) { error = e?.message || String(e); last = { ok: false, message: error, at: now() }; }
       writeJson(LAST_CMD, { id: options.cmdId, at: Date.now() });
