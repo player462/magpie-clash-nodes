@@ -225,6 +225,8 @@
     var sum = $('poolSummary'), body = $('poolBody');
     var names = S.nodes || [];
     var pool = S.pool || [];
+    var poolAll = (S.poolMode || 'selected') === 'all';
+    var inPool = function (name) { return poolAll || pool.indexOf(name) >= 0; };
     var drift = S.drift || { missing: [], added: [] };
     var inst = (S.router && S.router.running && S.router.nodes) || [];
     var profs = S.profiles || [];
@@ -236,10 +238,12 @@
     if (profs.length) {
       profHtml = '<div class="cn-profiles"><span class="cn-prof-title">订阅</span>' + profs.map(function (p) {
         var on = allChosen || chosen.indexOf(p.id) >= 0;
-        var count = names.filter(function (n) { return n.profileId === p.id; }).length;
+        var count = (S.profileCounts && S.profileCounts[p.id] != null)
+          ? S.profileCounts[p.id]
+          : names.filter(function (n) { return n.profileId === p.id; }).length;
         return '<label class="cn-prof' + (on ? ' on' : '') + '" title="更新于 ' + esc(fmtTime(p.updatedAt) || '未知') + '">' +
           '<input type="checkbox" data-kind="profile" data-id="' + esc(p.id) + '"' + (on ? ' checked' : '') + '>' +
-          esc(p.label) + '<i>' + count + '</i></label>';
+          esc(p.label) + (p.active ? '<em class="cn-sub-now">当前</em>' : '') + '<i>' + count + '</i></label>';
       }).join('') +
         '<button type="button" class="cn-btn ghost cn-prof-save" data-act="profiles-save">应用订阅</button></div>';
     }
@@ -247,21 +251,21 @@
     var blocks = (selected.length ? selected : [{ id: '', label: '当前订阅', updatedAt: 0 }]).map(function (p) {
       var list = names.filter(function (n) { return (n.profileId || '') === p.id; });
       if (!list.length) return '';
-      var picked = list.filter(function (n) { return pool.indexOf(n.name) >= 0; }).length;
+      var picked = list.filter(function (n) { return inPool(n.name); }).length;
       var open = openProfiles[p.id] !== undefined ? openProfiles[p.id] : selected.length === 1;
       var byRegion = {};
       list.forEach(function (n) { (byRegion[n.region] = byRegion[n.region] || []).push(n); });
       var inner = '';
       Object.keys(byRegion).sort().forEach(function (rg) {
         var arr = byRegion[rg];
-        var sel = arr.filter(function (n) { return pool.indexOf(n.name) >= 0; }).length;
+        var sel = arr.filter(function (n) { return inPool(n.name); }).length;
         inner += '<div class="cn-region"><span class="cn-region-name">' + esc(rg) + '</span>' +
           '<span class="cn-region-count">' + (sel ? sel + ' / ' : '') + arr.length + '</span></div>';
         arr.forEach(function (n) {
-          var inPool = pool.indexOf(n.name) >= 0;
+          var pickedNode = inPool(n.name);
           var port = inst.indexOf(n.name) >= 0 ? (S.router.mapping[n.name] || '') : '';
-          inner += '<label class="cn-pick' + (inPool ? ' on' : '') + '">' +
-            '<input type="checkbox" data-kind="pick" data-node="' + esc(n.name) + '"' + (inPool ? ' checked' : '') + '>' +
+          inner += '<label class="cn-pick' + (pickedNode ? ' on' : '') + '">' +
+            '<input type="checkbox" data-kind="pick" data-node="' + esc(n.name) + '"' + (pickedNode ? ' checked' : '') + '>' +
             '<span class="cn-pick-name" title="' + esc(n.name) + '">' + esc(n.originalName || n.name) + '</span>' +
             delayPill(n) +
             (port ? '<i class="cn-port">:' + port + '</i>' : '') +
@@ -278,14 +282,14 @@
     var flags = [];
     if (profs.length) flags.push('<span class="cn-flag">' + selected.length + ' / ' + profs.length + ' 个订阅</span>');
     if (drift.missing.length) flags.push('<span class="cn-flag bad">' + drift.missing.length + ' 个节点已失效</span>');
-    if (drift.added.length) flags.push('<span class="cn-flag ok">' + drift.added.length + ' 个新节点</span>');
     if (S.staleInstance) flags.push('<span class="cn-flag bad">端口待同步</span>');
     sum.innerHTML = '<span class="cn-sum-title">可用节点池</span>' +
-      '<span class="cn-sum-count">' + (pool.length ? '已选 ' + pool.length : '全部') + ' / ' + names.length + '</span>' +
+      '<span class="cn-sum-count">' + (poolAll ? '全部 ' + names.length : (pool.length ? '已选 ' + pool.length : '未选择')) +
+      (poolAll ? '' : ' / ' + names.length) + '</span>' +
       flags.join('');
     body.innerHTML = profHtml +
-      '<p class="cn-note">勾选的节点才会开成本地端口；供应商和账号的下拉只从池子里选。Clash 更新订阅后点右上「刷新」即可读到新节点。</p>' +
-      (S.poolTruncated ? '<div class="cn-warn"><span>每个订阅节点很多，默认先启用 ' + (S.poolEffective || []).length +
+      '<p class="cn-note">这是一个白名单：勾选哪些节点，插件就只开哪些本地端口；一个都不勾选就一个节点也不可用。供应商和账号的下拉只从池子里选。Clash 更新订阅后点右上「刷新」即可读到新节点。</p>' +
+      (S.poolTruncated ? '<div class="cn-warn"><span>这个订阅节点很多，首次默认勾选了 ' + (S.poolEffective || []).length +
         ' 个均衡节点。需要更多请在下面勾选后保存。</span></div>' : '') +
       '<div class="cn-prof-blocks">' + blocks + '</div>' +
       '<div class="cn-actions">' +
@@ -293,6 +297,7 @@
       '<button type="button" class="cn-btn" data-act="pool-test">⚡ 测全部延迟</button>' +
       '<button type="button" class="cn-btn ghost" data-act="pool-all">全选</button>' +
       '<button type="button" class="cn-btn ghost" data-act="pool-none">清空</button>' +
+      '<button type="button" class="cn-btn ghost" data-act="pool-use-all">使用全部节点</button>' +
       '</div>';
   }
 
@@ -314,7 +319,7 @@
     if (!nodeEntries().length) {
       detail.innerHTML = '<div class="cn-empty-state">' +
         '<div class="cn-empty-title">还没有可用的节点端口</div>' +
-        '<p class="cn-note">给梯子里的节点各开一个本地端口，就能在这里给供应商和账号指派节点。不会动 Clash 正在用的 7890 端口。</p>' +
+        '<p class="cn-note">先在「可用节点池」勾选节点并点「保存并同步端口」，就能在这里给供应商和账号指派节点。不会动 Clash 正在用的 7890 端口。</p>' +
         '<button type="button" class="cn-btn primary" data-act="start">一键准备节点端口</button></div>';
       return;
     }
@@ -441,6 +446,10 @@
       case 'pool-none':
         Array.prototype.forEach.call($('poolBody').querySelectorAll('input[data-kind="pick"]'), function (b) { b.checked = false; });
         break;
+      case 'pool-use-all':
+        if (window.confirm && !window.confirm('把所有订阅的所有节点都开成本地端口？节点多时会占用较多内存和端口。')) return;
+        send({ do: 'setPool', mode: 'all' }, { waitMs: 30000, busyBtn: '[data-act="pool-use-all"]', busyText: '正在开启全部节点…' });
+        break;
       case 'fix-stale': {
         var id = currentId;
         var d = draftFor(id);
@@ -473,7 +482,7 @@
     if (t.dataset && t.dataset.kind === 'pick') {
       var n = $('poolBody').querySelectorAll('input[data-kind="pick"]:checked').length;
       var b = $('poolSummary').querySelector('.cn-sum-count');
-      if (b) b.textContent = (n ? '已选 ' + n : '全部') + ' / ' + (S.nodes || []).length;
+      if (b) b.textContent = (n ? '已选 ' + n : '未选择') + ' / ' + (S.nodes || []).length;
       return;
     }
     if (t.dataset && t.dataset.kind === 'profile') {

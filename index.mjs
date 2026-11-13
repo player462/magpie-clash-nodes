@@ -49,13 +49,70 @@ function writeStateJs(state) {
   }
 }
 
-// The user's checked pool of usable nodes, kept across restarts. Empty = all.
+// The user's usable-node pool, kept across restarts.
+// `mode: "selected"` is a strict whitelist: only `nodes` get local ports and
+// an empty list means no node at all. `mode: "all"` is only set by an explicit
+// "全部节点" action, never as the silent meaning of an empty selection.
 const POOL_FILE = path.join(DIR, 'pool.json');
-function readPool() {
-  const j = readJson(POOL_FILE, {});
-  return Array.isArray(j.nodes) ? j.nodes.filter((n) => typeof n === 'string' && n) : [];
+function readPoolState() {
+  const j = readJson(POOL_FILE, null);
+  if (!j || typeof j !== 'object' || !Array.isArray(j.nodes)) {
+    return { mode: 'selected', nodes: [], initialized: false, auto: false };
+  }
+  const nodes = j.nodes.filter((n) => typeof n === 'string' && n);
+  // Legacy format: { nodes: [] } meant "all" (the old code's empty sentinel).
+  // Treat it as not initialized so the first run materialises a concrete
+  // default list instead of silently opening hundreds of ports.
+  const initialized = j.mode === 'all' || j.mode === 'selected' || nodes.length > 0;
+  const mode = j.mode === 'all' ? 'all' : 'selected';
+  return { mode, nodes, initialized, auto: !!j.auto, at: j.at || 0 };
 }
-function writePool(names) { writeJson(POOL_FILE, { nodes: names, at: Date.now() }); }
+function writePoolState(state) {
+  writeJson(POOL_FILE, {
+    mode: state.mode === 'all' ? 'all' : 'selected',
+    nodes: state.nodes,
+    auto: !!state.auto,
+    at: Date.now(),
+  });
+}
+
+// Default first-run whitelist. A 700-node subscription must not open 700
+// listeners, so pick a balanced sample across subscriptions and show it as
+// explicitly checked; the user can then add or remove individual nodes.
+const MAX_DEFAULT_LISTENERS = 120;
+function balancedDefault(nodes) {
+  const list = (nodes || []).map((x) => (typeof x === 'string' ? { name: x, profile: '' } : x));
+  if (list.length <= MAX_DEFAULT_LISTENERS) return list.map((x) => x.name);
+  const groups = new Map();
+  for (const n of list) {
+    const k = n.profile || '';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(n.name);
+  }
+  const out = [];
+  for (let i = 0; out.length < MAX_DEFAULT_LISTENERS; i++) {
+    let added = false;
+    for (const arr of groups.values()) {
+      if (i < arr.length) {
+        out.push(arr[i]);
+        added = true;
+        if (out.length >= MAX_DEFAULT_LISTENERS) break;
+      }
+    }
+    if (!added) break;
+  }
+  return out;
+}
+function ensurePool(nodes) {
+  const p = readPoolState();
+  if (p.initialized) return p;
+  const names = (nodes || []).map((x) => (typeof x === 'string' ? x : x.name));
+  if (!names.length) return p;
+  const picked = balancedDefault(nodes);
+  const next = { mode: 'selected', nodes: picked, initialized: true, auto: names.length > MAX_DEFAULT_LISTENERS };
+  writePoolState(next);
+  return next;
+}
 
 // Which Clash Party subscriptions take part. Missing file = only the active one.
 function readSelectedProfiles() {
@@ -92,10 +149,10 @@ function migrateLegacyNames(cat) {
       }
     }
     if (changed) writeJson(pf, ports);
-    const pool = readPool();
-    if (pool.length) {
-      const next = pool.map((x) => byOrig.get(x) || x);
-      if (next.join('\u0000') !== pool.join('\u0000')) writePool(next);
+    const pool = readPoolState();
+    if (pool.nodes.length) {
+      const next = pool.nodes.map((x) => byOrig.get(x) || x);
+      if (next.join('\u0000') !== pool.nodes.join('\u0000')) writePoolState({ ...pool, nodes: next });
     }
   } catch { /* migration is best effort */ }
 }
@@ -132,37 +189,12 @@ function loadCatalogue() {
 function readDelays() { return readJson(DELAYS_FILE, {}); }
 function writeDelays(map) { writeJson(DELAYS_FILE, map); }
 
-// Starting one listener per node of a 700-node subscription would cost far
-// more than it is worth. When nothing is checked, cap the default pool and
-// balance it across subscriptions instead of taking the first N alphabetically.
-const MAX_DEFAULT_LISTENERS = 120;
 function effectivePool(pool, nodes) {
-  const list = (nodes || []).map((x) => (typeof x === 'string' ? { name: x, profile: '' } : x));
+  const list = (nodes || []).map((x) => (typeof x === 'string' ? { name: x } : x));
   const names = list.map((x) => x.name);
-  if (pool.length) {
-    const eff = pool.filter((n) => names.includes(n));
-    return eff.length ? eff : names;
-  }
-  if (names.length <= MAX_DEFAULT_LISTENERS) return names;
-  const groups = new Map();
-  for (const n of list) {
-    const k = n.profile || '';
-    if (!groups.has(k)) groups.set(k, []);
-    groups.get(k).push(n.name);
-  }
-  const out = [];
-  for (let i = 0; out.length < MAX_DEFAULT_LISTENERS; i++) {
-    let added = false;
-    for (const arr of groups.values()) {
-      if (i < arr.length) {
-        out.push(arr[i]);
-        added = true;
-        if (out.length >= MAX_DEFAULT_LISTENERS) break;
-      }
-    }
-    if (!added) break;
-  }
-  return out;
+  if (pool.mode === 'all') return names;
+  const present = new Set(names);
+  return pool.nodes.filter((n) => present.has(n));
 }
 
 async function collect(c, error) {
@@ -184,13 +216,13 @@ async function collect(c, error) {
         profile: n.profileName, profileId: n.profileId,
       }))
     : (st ? st.nodes : []);
-  const pool = readPool();
+  const pool = ensurePool(nodes);
   const currentNames = nodes.map((n) => n.name);
   const eff = effectivePool(pool, nodes);
-  const poolTruncated = !pool.length && nodes.length > MAX_DEFAULT_LISTENERS;
-  const drift = pool.length ? {
-    missing: pool.filter((n) => !currentNames.includes(n)),
-    added: currentNames.filter((n) => !pool.includes(n)),
+  const poolTruncated = !!pool.auto && nodes.length > MAX_DEFAULT_LISTENERS;
+  const drift = pool.mode === 'selected' ? {
+    missing: pool.nodes.filter((n) => !currentNames.includes(n)),
+    added: currentNames.filter((n) => !pool.nodes.includes(n)),
   } : { missing: [], added: [] };
   const staleInstance = r.running &&
     JSON.stringify(Object.keys(r.mapping || {}).sort()) !== JSON.stringify(eff.slice().sort());
@@ -209,10 +241,12 @@ async function collect(c, error) {
     current: st ? (st.groups.find((g) => g.name === st.mainGroup)?.now || '') : '',
     groups: st ? st.groups.map((g) => ({ name: g.name, type: g.type, now: g.now, nodes: g.nodes })) : [],
     profiles: cat.profiles.map((p) => ({ id: p.id, label: p.label, active: p.active, updatedAt: p.updatedAt || 0 })),
+    profileCounts: cat.counts || {},
     profileChosen: cat.chosen,
     multiProfile: useProfiles,
     nodes,
-    pool,
+    pool: pool.nodes,
+    poolMode: pool.mode,
     poolEffective: eff,
     poolTruncated,
     drift,
@@ -245,11 +279,16 @@ async function ensureRouter(c) {
     const st = await c.state();
     sourceNodes = st.nodes;
   }
-  const eff = effectivePool(readPool(), sourceNodes);
+  const pool = ensurePool(sourceNodes);
+  const eff = effectivePool(pool, sourceNodes);
   const r = router.routerStatus();
   if (r.running && !(await router.instanceAlive())) {
     // state file says running but the mihomo died: clear the lie, respawn
     await router.stopRouter({ quiet: true }).catch(() => {});
+  } else if (!eff.length) {
+    // Strict whitelist: an empty pool really means no node ports at all.
+    if (r.running) await router.stopRouter({ quiet: true }).catch(() => {});
+    return router.routerStatus();
   } else if (mappingMatches(r, eff)) {
     return r;
   } else if (r.running) {
@@ -277,6 +316,7 @@ async function execute(cmd, c) {
 
     case 'test': {
       const rr = await ensureRouter(c);
+      if (!rr.running) throw new Error('节点池为空，请先勾选节点并保存');
       const names = Object.keys(rr.mapping || {});
       const delays = await router.testDelays(names, { controllerPort: rr.controllerPort, concurrency: 8 });
       writeDelays({ ...readDelays(), ...delays });
@@ -288,9 +328,11 @@ async function execute(cmd, c) {
       const cat = loadCatalogue();
       const sourceNodes = cat.nodes.length ? cat.nodes : (await c.state()).nodes;
       const currentNames = sourceNodes.map((n) => n.name);
+      const pool = ensurePool(sourceNodes);
       const names = cmd.nodes?.length
         ? cmd.nodes.filter((n) => currentNames.includes(n))
-        : effectivePool(readPool(), sourceNodes);
+        : effectivePool(pool, sourceNodes);
+      if (!names.length) throw new Error('节点池为空，请先勾选节点并保存');
       const blockMap = Object.fromEntries(cat.nodes.map((n) => [n.name, n.raw]));
       const proxyBlocks = cat.nodes.length ? names.map((n) => blockMap[n]).filter(Boolean) : undefined;
       const s = await router.startRouter(names, {
@@ -303,19 +345,25 @@ async function execute(cmd, c) {
       const cat = loadCatalogue();
       const sourceNodes = cat.nodes.length ? cat.nodes : (await c.state()).nodes;
       const currentNames = sourceNodes.map((n) => n.name);
-      const names = (cmd.nodes || []).filter((n) => currentNames.includes(n));
-      writePool(names);
-      const eff = effectivePool(names, sourceNodes);
+      const mode = cmd.mode === 'all' ? 'all' : 'selected';
+      const names = mode === 'all'
+        ? currentNames
+        : (cmd.nodes || []).filter((n) => currentNames.includes(n));
+      writePoolState({ mode, nodes: names, auto: false });
+      const eff = effectivePool({ mode, nodes: names }, sourceNodes);
       const prev = router.routerStatus();
-      const same = mappingMatches(prev, eff);
-      if (!same) {
+      if (!eff.length) {
+        await router.stopRouter({ quiet: true }).catch(() => {});
+      } else if (!mappingMatches(prev, eff)) {
         const blockMap = Object.fromEntries(cat.nodes.map((n) => [n.name, n.raw]));
         const proxyBlocks = cat.nodes.length ? eff.map((n) => blockMap[n]).filter(Boolean) : undefined;
         await router.startRouter(eff, { proxyBlocks });
       }
       return {
         ok: true,
-        message: names.length ? `节点池已保存：${eff.length} 个节点可用` : '节点池已清空：全部节点可用',
+        message: mode === 'all'
+          ? `节点池已设为全部 ${eff.length} 个节点`
+          : (eff.length ? `节点池已保存：${eff.length} 个节点可用` : '节点池已清空：现在没有可用节点'),
         at: now(),
       };
     }
@@ -324,16 +372,20 @@ async function execute(cmd, c) {
       const ids = (cmd.profiles || []).filter((x) => typeof x === 'string');
       writeSelectedProfiles(ids);
       const cat = loadCatalogue();
-      const valid = new Set(cat.nodes.map((n) => n.name));
-      const kept = readPool().filter((n) => valid.has(n));
-      writePool(kept);
-      const names = effectivePool(kept, cat.nodes);
+      const pool = ensurePool(cat.nodes);
+      const names = effectivePool(pool, cat.nodes);
       const blockMap = Object.fromEntries(cat.nodes.map((n) => [n.name, n.raw]));
       const proxyBlocks = names.map((n) => blockMap[n]).filter(Boolean);
-      await router.startRouter(names, { proxyBlocks });
+      if (!names.length) {
+        await router.stopRouter({ quiet: true }).catch(() => {});
+      } else {
+        await router.startRouter(names, { proxyBlocks });
+      }
       return {
         ok: true,
-        message: ids.length ? `已启用 ${ids.length} 个订阅：${cat.nodes.length} 个节点` : `已启用全部 ${cat.profiles.length} 个订阅：${cat.nodes.length} 个节点`,
+        message: ids.length
+          ? `已启用 ${ids.length} 个订阅：${cat.nodes.length} 个节点${names.length ? '' : '（节点池里没有属于这些订阅的节点，请重新勾选）'}`
+          : `已启用全部 ${cat.profiles.length} 个订阅：${cat.nodes.length} 个节点${names.length ? '' : '（节点池为空，请勾选节点）'}`,
         at: now(),
       };
     }

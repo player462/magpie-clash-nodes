@@ -172,6 +172,10 @@ body {
 }
 .cn-prof input { accent-color: var(--cn-ok); width: 12px; height: 12px; margin: 0; }
 .cn-prof i { font-style: normal; font-size: 10px; opacity: .55; }
+.cn-sub-now {
+  font-style: normal; font-size: 9.5px; line-height: 1; padding: 2px 5px; border-radius: 999px;
+  color: var(--cn-ok); background: color-mix(in srgb, var(--cn-ok) 14%, transparent);
+}
 .cn-prof-save { margin-left: auto; padding: 3px 11px; font-size: 11px; }
 .cn-profile-row { border-top: 1px solid var(--cn-line) !important; margin-top: 16px; padding-top: 11px; }
 .cn-profile-row .cn-region-name { font-size: 12px; opacity: .8; }
